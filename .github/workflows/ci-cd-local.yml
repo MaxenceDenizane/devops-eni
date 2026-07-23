@@ -89,6 +89,20 @@ jobs:
     needs: test
     runs-on: ubuntu-latest
     
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ROOT_PASSWORD: test_password
+          MYSQL_DATABASE: todolist_db
+        options: >-
+          --health-cmd="mysqladmin ping -h localhost -u root -ptest_password"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=3
+        ports:
+          - 3306:3306
+    
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -98,12 +112,29 @@ jobs:
           docker build -t projetback:${{ github.sha }} .
           docker tag projetback:${{ github.sha }} projetback:latest
 
+      - name: Wait for MySQL to be ready
+        run: |
+          for i in {1..30}; do
+            if mysqladmin ping -h 127.0.0.1 -u root -ptest_password &> /dev/null; then
+              echo "MySQL is ready"
+              exit 0
+            fi
+            echo "Waiting for MySQL... ($i/30)"
+            sleep 1
+          done
+          echo "MySQL failed to start"
+          exit 1
+
+      - name: Initialize database
+        run: |
+          mysql -h 127.0.0.1 -u root -ptest_password todolist_db < scriptSQL.sql
+
       - name: Start application container
         run: |
           docker run -d \
             --name projetback-app \
-            -p 3000:3000 \
-            -e DB_HOST=localhost \
+            --network host \
+            -e DB_HOST=127.0.0.1 \
             -e DB_USER=root \
             -e DB_PASSWORD=test_password \
             -e DB_NAME=todolist_db \
