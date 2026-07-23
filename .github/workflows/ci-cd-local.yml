@@ -145,8 +145,7 @@ jobs:
       - name: Wait for application to start
         run: |
           for i in {1..30}; do
-            if curl -f http://localhost:3000/health &> /dev/null || \
-               curl -s http://localhost:3000 &> /dev/null; then
+            if curl -f http://localhost:3000/health &> /dev/null; then
               echo "Application is ready"
               exit 0
             fi
@@ -161,16 +160,32 @@ jobs:
         run: |
           echo "Testing application endpoints..."
           
-          # Test basic health/availability
-          response=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:3000)
-          if [ "$response" != "200" ] && [ "$response" != "404" ]; then
-            echo "Health check failed with status $response"
+          # Test health endpoint
+          response=$(curl -s http://localhost:3000/health)
+          status=$(echo "$response" | grep -o '"status":"[^"]*' | cut -d'"' -f4)
+          if [ "$status" != "UP" ]; then
+            echo "✗ Health check failed: $response"
             exit 1
           fi
-          echo "✓ Application is responding"
+          echo "✓ Health check passed - API is UP"
           
-          # Test if API is accessible
-          curl -v http://localhost:3000 || true
+          # Test root endpoint
+          root_response=$(curl -s -w "\n%{http_code}" http://localhost:3000)
+          root_code=$(echo "$root_response" | tail -n 1)
+          if [ "$root_code" != "200" ]; then
+            echo "✗ Root endpoint returned $root_code"
+            exit 1
+          fi
+          echo "✓ Root endpoint responding with HTTP 200"
+          
+          # Test API tasks endpoint
+          tasks_response=$(curl -s http://localhost:3000/api/tasks)
+          if echo "$tasks_response" | grep -q "\["; then
+            echo "✓ API /tasks endpoint is responding"
+          else
+            echo "✗ API /tasks endpoint returned unexpected response"
+            exit 1
+          fi
 
       - name: Cleanup Docker container
         if: always()

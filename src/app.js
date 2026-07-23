@@ -10,6 +10,16 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
+// Health check endpoint for monitoring
+app.get('/health', (req, res) => {
+  res.json({ 
+    status: 'UP', 
+    service: 'Backend API',
+    timestamp: new Date().toISOString(),
+    uptime: process.uptime()
+  });
+});
+
 // Routes
 app.get('/', (req, res) => {
   res.json({ message: 'Backend API is running', status: 'OK' });
