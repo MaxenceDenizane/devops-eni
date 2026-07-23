@@ -1,0 +1,162 @@
+name: CI/CD Pipeline - Local Deployment
+
+# Trigger on push and pull requests to main branch
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  # Job 1: Run unit and integration tests
+  test:
+    runs-on: ubuntu-latest
+    
+    # Start MySQL service container for tests
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ROOT_PASSWORD: test_password
+          MYSQL_DATABASE: todolist_db
+        options: >-
+          --health-cmd="mysqladmin ping -h localhost -u root -ptest_password"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=3
+        ports:
+          - 3306:3306
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Wait for MySQL to be ready
+        run: |
+          for i in {1..30}; do
+            if mysql -h 127.0.0.1 -u root -ptest_password -e "SELECT 1" &> /dev/null; then
+              echo "MySQL is ready"
+              exit 0
+            fi
+            echo "Waiting for MySQL... ($i/30)"
+            sleep 1
+          done
+          echo "MySQL failed to start"
+          exit 1
+
+      - name: Initialize database
+        env:
+          DB_HOST: 127.0.0.1
+          DB_USER: root
+          DB_PASSWORD: test_password
+          DB_NAME: todolist_db
+          DB_DIALECT: mysql
+        run: |
+          mysql -h 127.0.0.1 -u root -ptest_password todolist_db < scriptSQL.sql
+
+      - name: Run unit and integration tests
+        env:
+          DB_HOST: 127.0.0.1
+          DB_USER: root
+          DB_PASSWORD: test_password
+          DB_NAME: todolist_db
+          DB_DIALECT: mysql
+          NODE_ENV: test
+        run: npm test -- --coverage
+
+      - name: Upload coverage reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: coverage/
+          retention-days: 30
+
+  # Job 2: Build Docker image and deploy locally
+  build-and-deploy:
+    needs: test
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Build Docker image
+        run: |
+          docker build -t projetback:${{ github.sha }} .
+          docker tag projetback:${{ github.sha }} projetback:latest
+
+      - name: Start application container
+        run: |
+          docker run -d \
+            --name projetback-app \
+            -p 3000:3000 \
+            -e DB_HOST=localhost \
+            -e DB_USER=root \
+            -e DB_PASSWORD=test_password \
+            -e DB_NAME=todolist_db \
+            -e DB_DIALECT=mysql \
+            -e NODE_ENV=production \
+            projetback:latest
+
+      - name: Wait for application to start
+        run: |
+          for i in {1..30}; do
+            if curl -f http://localhost:3000/health &> /dev/null || \
+               curl -s http://localhost:3000 &> /dev/null; then
+              echo "Application is ready"
+              exit 0
+            fi
+            echo "Waiting for application... ($i/30)"
+            sleep 2
+          done
+          echo "Application failed to start"
+          docker logs projetback-app
+          exit 1
+
+      - name: Run smoke tests
+        run: |
+          echo "Testing application endpoints..."
+          
+          # Test basic health/availability
+          response=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:3000)
+          if [ "$response" != "200" ] && [ "$response" != "404" ]; then
+            echo "Health check failed with status $response"
+            exit 1
+          fi
+          echo "✓ Application is responding"
+          
+          # Test if API is accessible
+          curl -v http://localhost:3000 || true
+
+      - name: Cleanup Docker container
+        if: always()
+        run: |
+          docker stop projetback-app || true
+          docker rm projetback-app || true
+
+  # Job 3: Notify results (optional)
+  notify:
+    if: always()
+    needs: [test, build-and-deploy]
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Check if pipeline passed
+        run: |
+          if [ "${{ needs.test.result }}" == "success" ] && [ "${{ needs.build-and-deploy.result }}" == "success" ]; then
+            echo "✓ All checks passed!"
+            exit 0
+          else
+            echo "✗ Pipeline failed"
+            exit 1
+          fi

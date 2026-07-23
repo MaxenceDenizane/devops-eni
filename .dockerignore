@@ -1,0 +1,10 @@
+node_modules
+npm-debug.log
+.git
+.gitignore
+README.md
+.env
+.dockerignore
+.DS_Store
+tests
+jest.config.js
