@@ -134,7 +134,7 @@ describe('Task Routes Integration Tests', () => {
 
     test('should delete a task', async () => {
       const response = await request(app).delete(`/api/tasks/${taskId}`);
-      expect(response.status).toBe(200);
+      expect(response.status).toBe(204);
 
       // Verify task is deleted
       const getResponse = await request(app).get(`/api/tasks/${taskId}`);
